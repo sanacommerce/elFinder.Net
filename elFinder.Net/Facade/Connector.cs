@@ -4,6 +4,7 @@ using System.Web;
 using System.Web.Mvc;
 using ElFinder.DTO;
 using System.IO;
+using ElFinder.FileSystem;
 
 namespace ElFinder
 {
@@ -180,10 +181,10 @@ namespace ElFinder
         /// Get actual filesystem path by hash
         /// </summary>
         /// <param name="hash">Hash of file or directory</param>
-        public FileSystemInfo GetFileByHash(string hash)
+        public IFileSystemMetadata GetFileByHash(string hash)
         {
             FullPath path = _driver.ParsePath(hash);
-            return !path.IsDirectoty ? (FileSystemInfo)path.File : (FileSystemInfo)path.Directory;
+            return !path.IsDirectoty ? (IFileSystemMetadata)path.File : (IFileSystemMetadata)path.Directory;
         }
 
         public ActionResult GetThumbnail(HttpRequestBase request, HttpResponseBase response, string hash)

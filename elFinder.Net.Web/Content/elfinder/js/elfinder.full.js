@@ -7578,7 +7578,7 @@ elFinder.prototype.commands.download = function() {
 					$(iframes).each(function() {
 						$('#' + $(this).attr('id')).remove();
 					});
-				}, fm.UA.Firefox? (20000 + (10000 * i)) : 1000); // give mozilla 20 sec + 10 sec for each file to be saved
+				}, (20000 + (10000 * i))); // give 20 sec + 10 sec for each file to be saved
 			});
 		fm.trigger('download', {files : files});
 		return dfrd.resolve(hashes);

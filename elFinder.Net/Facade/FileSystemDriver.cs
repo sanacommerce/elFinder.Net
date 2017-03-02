@@ -7,6 +7,8 @@ using System.Web.Mvc;
 
 using ElFinder.DTO;
 using ElFinder.Response;
+using ElFinder.FileSystem;
+using System.Text;
 
 namespace ElFinder
 {
@@ -16,81 +18,86 @@ namespace ElFinder
     public class FileSystemDriver : IDriver
     {
         #region private  
-            private const string _volumePrefix = "v";
-            private List<Root> _roots;
+        private const string _volumePrefix = "v";
+        private List<Root> _roots;
+        private IFileSystemProvider _fileSystemProvider;
 
-            private JsonResult Json(object data)
+        private JsonResult Json(object data)
+        {
+            return new JsonDataContractResult(data) { JsonRequestBehavior = JsonRequestBehavior.AllowGet, ContentType = "text/html" };
+        }
+        private void DirectoryCopy(DirectoryMetadata sourceDir, string destDirName, bool copySubDirs)
+        {
+            var dirs = _fileSystemProvider.GetDirectories(sourceDir.Path);
+
+            // If the source directory does not exist, throw an exception.
+            if (!_fileSystemProvider.DirectoryExists(sourceDir.Path))
             {
-                return new JsonDataContractResult(data) { JsonRequestBehavior = JsonRequestBehavior.AllowGet, ContentType = "text/html" };
-            }
-            private void DirectoryCopy(DirectoryInfo sourceDir, string destDirName, bool copySubDirs)
-            {
-                DirectoryInfo[] dirs = sourceDir.GetDirectories();
-
-                // If the source directory does not exist, throw an exception.
-                if (!sourceDir.Exists)
-                {
-                    throw new DirectoryNotFoundException("Source directory does not exist or could not be found: " + sourceDir.FullName);
-                }
-
-                // If the destination directory does not exist, create it.
-                if (!Directory.Exists(destDirName))
-                {
-                    Directory.CreateDirectory(destDirName);
-                }
-
-                // Get the file contents of the directory to copy.
-                FileInfo[] files = sourceDir.GetFiles();
-
-                foreach (FileInfo file in files)
-                {
-                    // Create the path to the new copy of the file.
-                    string temppath = Path.Combine(destDirName, file.Name);
-
-                    // Copy the file.
-                    file.CopyTo(temppath, false);
-                }
-
-                // If copySubDirs is true, copy the subdirectories.
-                if (copySubDirs)
-                {
-                    foreach (DirectoryInfo subdir in dirs)
-                    {
-                        // Create the subdirectory.
-                        string temppath = Path.Combine(destDirName, subdir.Name);
-
-                        // Copy the subdirectories.
-                        DirectoryCopy(subdir, temppath, copySubDirs);
-                    }
-                }
+                throw new DirectoryNotFoundException("Source directory does not exist or could not be found: " + sourceDir.Path);
             }
 
-            private void RemoveThumbs(FullPath path)
+            // If the destination directory does not exist, create it.
+            _fileSystemProvider.CreateDirectoryIfNotExists(destDirName);
+
+            // Get the file contents of the directory to copy.
+            var files = _fileSystemProvider.GetFiles(sourceDir.Path);
+
+            foreach (FileMetadata file in files)
             {
-                if (path.Directory != null)
+                // Create the path to the new copy of the file.
+                string temppath = _fileSystemProvider.CombinePath(destDirName, file.Name);
+
+                // Copy the file.
+                _fileSystemProvider.CopyFile(file.Path, temppath);
+            }
+
+            // If copySubDirs is true, copy the subdirectories.
+            if (copySubDirs)
+            {
+                foreach (DirectoryMetadata subdir in dirs)
                 {
-                    string thumbPath = path.Root.GetExistingThumbPath(path.Directory);
-                    if (thumbPath != null)
-                        Directory.Delete(thumbPath, true);
-                }
-                else
-                {
-                    string thumbPath = path.Root.GetExistingThumbPath(path.File);
-                    if (thumbPath != null)
-                        File.Delete(thumbPath);
+                    // Create the subdirectory.
+                    string temppath = _fileSystemProvider.CombinePath(destDirName, subdir.Name);
+
+                    // Copy the subdirectories.
+                    DirectoryCopy(subdir, temppath, copySubDirs);
                 }
             }
+        }
+
+        private void RemoveThumbs(FullPath path)
+        {
+            if (path.Directory != null)
+            {
+                string thumbPath = path.Root.GetExistingThumbPath(path.Directory);
+                if (thumbPath != null)
+                    _fileSystemProvider.DeleteDirectory(thumbPath);
+            }
+            else
+            {
+                string thumbPath = path.Root.GetExistingThumbPath(path.File);
+                if (thumbPath != null)
+                    _fileSystemProvider.DeleteFile(thumbPath);
+            }
+        }
+
+        private void UpdateFileMetadata(FileMetadata metadata, DateTime modifiedDateTime, long size)
+        {
+            metadata.ModifiedDate = modifiedDateTime.ToUniversalTime();
+            metadata.Length = size;
+        }
+
         #endregion
 
         #region public 
-        
+
         public FullPath ParsePath(string target)
         {
             string volumePrefix = null;
             string pathHash = null;
             for (int i = 0; i < target.Length; i++)
             {
-                if ( target[i] == '_')
+                if (target[i] == '_')
                 {
                     pathHash = target.Substring(i + 1);
                     volumePrefix = target.Substring(0, i + 1);
@@ -100,14 +107,18 @@ namespace ElFinder
             Root root = _roots.First(r => r.VolumeId == volumePrefix);
             string path = Helper.DecodePath(pathHash);
             string dirUrl = path != root.Directory.Name ? path : string.Empty;
-            var dir = new DirectoryInfo(root.Directory.FullName + dirUrl);
-            if (dir.Exists)
+            var fullPath = _fileSystemProvider.CombinePath(root.Directory.Path, dirUrl);
+            bool looksLikeDirectory = fullPath.EndsWith(Path.DirectorySeparatorChar.ToString()) 
+                || fullPath.EndsWith(Path.AltDirectorySeparatorChar.ToString());
+
+            if (_fileSystemProvider.DirectoryExists(fullPath) || looksLikeDirectory)
             {
+                var dir = new DirectoryMetadata(fullPath);
                 return new FullPath(root, dir);
             }
             else
             {
-                var file = new FileInfo(root.Directory.FullName + dirUrl);
+                var file = _fileSystemProvider.GetFileMetadata(fullPath);
                 return new FullPath(root, file);
             }
         }
@@ -116,8 +127,22 @@ namespace ElFinder
         /// Initialize new instance of class ElFinder.FileSystemDriver 
         /// </summary>
         public FileSystemDriver()
+            : this(new FileSystemProvider())
         {
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="FileSystemDriver"/> class.
+        /// </summary>
+        /// <param name="fileSystemProvider">The file system provider.</param>
+        /// <exception cref="ArgumentNullException">fileSystemManager;fileSystemManager cannot be null.</exception>
+        public FileSystemDriver(IFileSystemProvider fileSystemProvider)
+        {
+            if (fileSystemProvider == null)
+                throw new ArgumentNullException("fileSystemProvider", "fileSystemProvider cannot be null.");
+
             _roots = new List<Root>();
+            _fileSystemProvider = fileSystemProvider;
         }
 
         /// <summary>
@@ -126,6 +151,7 @@ namespace ElFinder
         /// <param name="item"></param>
         public void AddRoot(Root item)
         {
+            item.Initialize(_fileSystemProvider);
             _roots.Add(item);
             item.VolumeId = _volumePrefix + _roots.Count + "_";
         }
@@ -141,15 +167,13 @@ namespace ElFinder
         {
             FullPath fullPath = ParsePath(target);
             OpenResponse answer = new OpenResponse(DTOBase.Create(fullPath.Directory, fullPath.Root), fullPath);
-            foreach (FileInfo item in fullPath.Directory.GetFiles())
+            foreach (FileMetadata item in _fileSystemProvider.GetFiles(fullPath.Directory.Path, visibleOnly: true))
             {
-                if ((item.Attributes & FileAttributes.Hidden) != FileAttributes.Hidden)
-                    answer.Files.Add(DTOBase.Create(item, fullPath.Root));
+                answer.Files.Add(DTOBase.Create(item, fullPath.Root));
             }
-            foreach (DirectoryInfo item in fullPath.Directory.GetDirectories())
+            foreach (DirectoryMetadata item in _fileSystemProvider.GetDirectories(fullPath.Directory.Path, visibleOnly: true))
             {
-                if((item.Attributes & FileAttributes.Hidden) != FileAttributes.Hidden)
-                    answer.Files.Add(DTOBase.Create(item, fullPath.Root));
+                answer.Files.Add(DTOBase.Create(item, fullPath.Root));
             }
             return Json(answer);
         }
@@ -161,37 +185,34 @@ namespace ElFinder
                 Root root = _roots.FirstOrDefault(r => r.StartPath != null);
                 if (root == null)
                     root = _roots.First();
-                fullPath = new FullPath(root, root.StartPath??root.Directory);
+                fullPath = new FullPath(root, root.StartPath ?? root.Directory);
             }
             else
             {
                 fullPath = ParsePath(target);
             }
-            InitResponse answer = new InitResponse(DTOBase.Create(fullPath.Directory, fullPath.Root), new Options(fullPath));            
+            InitResponse answer = new InitResponse(DTOBase.Create(fullPath.Directory, fullPath.Root), new Options(fullPath));
 
-            foreach (FileInfo item in fullPath.Directory.GetFiles())
+            foreach (FileMetadata item in _fileSystemProvider.GetFiles(fullPath.Directory.Path, visibleOnly: true))
             {
-                if ((item.Attributes & FileAttributes.Hidden) != FileAttributes.Hidden)
-                    answer.Files.Add(DTOBase.Create(item, fullPath.Root));
+                answer.Files.Add(DTOBase.Create(item, fullPath.Root));
             }
-            foreach (DirectoryInfo item in fullPath.Directory.GetDirectories())
+            foreach (DirectoryMetadata item in _fileSystemProvider.GetDirectories(fullPath.Directory.Path, visibleOnly: true))
             {
-                if ((item.Attributes & FileAttributes.Hidden) != FileAttributes.Hidden)
-                    answer.Files.Add(DTOBase.Create(item, fullPath.Root));
+                answer.Files.Add(DTOBase.Create(item, fullPath.Root));
             }
             foreach (Root item in _roots)
             {
                 answer.Files.Add(DTOBase.Create(item.Directory, item));
             }
-            if (fullPath.Root.Directory.FullName != fullPath.Directory.FullName)
+            if (fullPath.Root.Directory.Path != fullPath.Directory.Path)
             {
-                foreach (DirectoryInfo item in fullPath.Root.Directory.GetDirectories())
+                foreach (DirectoryMetadata item in _fileSystemProvider.GetDirectories(fullPath.Root.Directory.Path, visibleOnly: true))
                 {
-                    if ((item.Attributes & FileAttributes.Hidden) != FileAttributes.Hidden)
-                        answer.Files.Add(DTOBase.Create(item, fullPath.Root));
+                    answer.Files.Add(DTOBase.Create(item, fullPath.Root));
                 }
             }
-            if(fullPath.Root.MaxUploadSize.HasValue)
+            if (fullPath.Root.MaxUploadSize.HasValue)
             {
                 answer.UploadMaxSize = fullPath.Root.MaxUploadSizeInKb.Value + "K";
             }
@@ -200,30 +221,30 @@ namespace ElFinder
         ActionResult IDriver.File(string target, bool download)
         {
             FullPath fullPath = ParsePath(target);
-            if(fullPath.IsDirectoty)
+            if (fullPath.IsDirectoty)
                 return new HttpStatusCodeResult(403, "You can not download whole folder");
-            if (!fullPath.File.Exists)
+            if (!_fileSystemProvider.FileExists(fullPath.File.Path))
                 return new HttpNotFoundResult("File not found");
             if (fullPath.Root.IsShowOnly)
                 return new HttpStatusCodeResult(403, "Access denied. Volume is for show only");
-            return new DownloadFileResult(fullPath.File, download);
+            return new DownloadFileResult(fullPath.File, download, _fileSystemProvider);
         }
         JsonResult IDriver.Parents(string target)
         {
             FullPath fullPath = ParsePath(target);
             TreeResponse answer = new TreeResponse();
-            if (fullPath.Directory.FullName == fullPath.Root.Directory.FullName)
+            if (fullPath.Directory.Path == fullPath.Root.Directory.Path)
             {
-                answer.Tree.Add(DTOBase.Create(fullPath.Directory, fullPath.Root)); 
+                answer.Tree.Add(DTOBase.Create(fullPath.Directory, fullPath.Root));
             }
             else
             {
-                DirectoryInfo parent = fullPath.Directory;
-                foreach (var item in parent.Parent.GetDirectories())
+                DirectoryMetadata parent = fullPath.Directory;
+                foreach (var item in _fileSystemProvider.GetDirectories(parent.Parent.Path))
                 {
                     answer.Tree.Add(DTOBase.Create(item, fullPath.Root));
                 }
-                while (parent.FullName != fullPath.Root.Directory.FullName)
+                while (parent.Path != fullPath.Root.Directory.Path)
                 {
                     parent = parent.Parent;
                     answer.Tree.Add(DTOBase.Create(parent, fullPath.Root));
@@ -235,10 +256,9 @@ namespace ElFinder
         {
             FullPath fullPath = ParsePath(target);
             TreeResponse answer = new TreeResponse();
-            foreach (var item in fullPath.Directory.GetDirectories())
+            foreach (var item in _fileSystemProvider.GetDirectories(fullPath.Directory.Path, visibleOnly: true))
             {
-                if ((item.Attributes & FileAttributes.Hidden) != FileAttributes.Hidden)
-                    answer.Tree.Add(DTOBase.Create(item, fullPath.Root));
+                answer.Tree.Add(DTOBase.Create(item, fullPath.Root));
             }
             return Json(answer);
         }
@@ -246,7 +266,7 @@ namespace ElFinder
         {
             FullPath fullPath = ParsePath(target);
             ListResponse answer = new ListResponse();
-            foreach (var item in fullPath.Directory.GetFileSystemInfos())
+            foreach (var item in _fileSystemProvider.GetFileSystemMetadataItems(fullPath.Directory.Path))
             {
                 answer.List.Add(item.Name);
             }
@@ -255,14 +275,17 @@ namespace ElFinder
         JsonResult IDriver.MakeDir(string target, string name)
         {
             FullPath fullPath = ParsePath(target);
-            DirectoryInfo newDir = Directory.CreateDirectory(Path.Combine(fullPath.Directory.FullName, name));
+            DirectoryMetadata newDir = new DirectoryMetadata(_fileSystemProvider.CombinePath(fullPath.Directory.Path, name));
+            _fileSystemProvider.CreateDirectoryIfNotExists(newDir.Path);
             return Json(new AddResponse(newDir, fullPath.Root));
         }
         JsonResult IDriver.MakeFile(string target, string name)
         {
             FullPath fullPath = ParsePath(target);
-            FileInfo newFile = new FileInfo(Path.Combine(fullPath.Directory.FullName, name));
-            newFile.Create().Close();            
+            FileMetadata newFile = new FileMetadata(_fileSystemProvider.CombinePath(fullPath.Directory.Path, name));
+            var stream = _fileSystemProvider.OpenWrite(newFile.Path);
+            stream.Close();
+
             return Json(new AddResponse(newFile, fullPath.Root));
         }
         JsonResult IDriver.Rename(string target, string name)
@@ -273,15 +296,15 @@ namespace ElFinder
             RemoveThumbs(fullPath);
             if (fullPath.Directory != null)
             {
-                string newPath = Path.Combine(fullPath.Directory.Parent.FullName, name);
-                System.IO.Directory.Move(fullPath.Directory.FullName, newPath);
-                answer.Added.Add(DTOBase.Create(new DirectoryInfo(newPath), fullPath.Root));
+                string newPath = _fileSystemProvider.CombinePath(fullPath.Directory.Parent.Path, name);
+                _fileSystemProvider.MoveDirectory(fullPath.Directory.Path, newPath);
+                answer.Added.Add(DTOBase.Create(new DirectoryMetadata(newPath), fullPath.Root));
             }
             else
             {
-                string newPath = Path.Combine(fullPath.File.DirectoryName, name);
-                File.Move(fullPath.File.FullName, newPath);
-                answer.Added.Add(DTOBase.Create(new FileInfo(newPath), fullPath.Root));
+                string newPath = _fileSystemProvider.CombinePath(fullPath.File.Directory.Path, name);
+                _fileSystemProvider.MoveFile(fullPath.File.Path, newPath);
+                answer.Added.Add(DTOBase.Create(_fileSystemProvider.GetFileMetadata(newPath), fullPath.Root));
             }
             return Json(answer);
         }
@@ -291,14 +314,14 @@ namespace ElFinder
             foreach (string item in targets)
             {
                 FullPath fullPath = ParsePath(item);
-                RemoveThumbs(fullPath);                
+                RemoveThumbs(fullPath);
                 if (fullPath.Directory != null)
                 {
-                    System.IO.Directory.Delete(fullPath.Directory.FullName, true);
+                    _fileSystemProvider.DeleteDirectory(fullPath.Directory.Path);
                 }
                 else
                 {
-                    File.Delete(fullPath.File.FullName);
+                    _fileSystemProvider.DeleteFile(fullPath.File.Path);
                 }
                 answer.Removed.Add(item);
             }
@@ -307,8 +330,8 @@ namespace ElFinder
         JsonResult IDriver.Get(string target)
         {
             FullPath fullPath = ParsePath(target);
-            GetResponse answer =  new GetResponse();
-            using (StreamReader reader = new StreamReader(fullPath.File.OpenRead()))
+            GetResponse answer = new GetResponse();
+            using (StreamReader reader = new StreamReader(_fileSystemProvider.OpenRead(fullPath.File.Path)))
             {
                 answer.Content = reader.ReadToEnd();
             }
@@ -318,10 +341,14 @@ namespace ElFinder
         {
             FullPath fullPath = ParsePath(target);
             ChangedResponse answer = new ChangedResponse();
-            using (StreamWriter writer = new StreamWriter(fullPath.File.FullName, false))
+
+            using (var output = _fileSystemProvider.OpenWrite(fullPath.File.Path))
             {
-                writer.Write(content);
+                output.Write(Encoding.UTF8.GetBytes(content), 0, content.Length);
             }
+
+            UpdateFileMetadata(fullPath.File, modifiedDateTime: DateTime.Now, size: content.Length);
+
             answer.Changed.Add((FileDTO)DTOBase.Create(fullPath.File, fullPath.Root));
             return Json(answer);
         }
@@ -334,37 +361,37 @@ namespace ElFinder
                 FullPath src = ParsePath(item);
                 if (src.Directory != null)
                 {
-                    DirectoryInfo newDir = new DirectoryInfo(Path.Combine(destPath.Directory.FullName, src.Directory.Name));
-                    if (newDir.Exists)
-                        Directory.Delete(newDir.FullName, true);
+                    DirectoryMetadata newDir = new DirectoryMetadata(_fileSystemProvider.CombinePath(destPath.Directory.Path, src.Directory.Name));
+                    if (_fileSystemProvider.DirectoryExists(newDir.Path))
+                        _fileSystemProvider.DeleteDirectory(newDir.Path);
                     if (isCut)
                     {
                         RemoveThumbs(src);
-                        src.Directory.MoveTo(newDir.FullName);
+                        _fileSystemProvider.MoveDirectory(src.Directory.Path, newDir.Path);
                         response.Removed.Add(item);
                     }
                     else
                     {
-                        DirectoryCopy(src.Directory, newDir.FullName, true);
+                        DirectoryCopy(src.Directory, newDir.Path, true);
                     }
                     response.Added.Add(DTOBase.Create(newDir, destPath.Root));
                 }
                 else
                 {
-                    string newFilePath = Path.Combine(destPath.Directory.FullName, src.File.Name);
-                    if (File.Exists(newFilePath))
-                        File.Delete(newFilePath);
+                    string newFilePath = _fileSystemProvider.CombinePath(destPath.Directory.Path, src.File.Name);
+                    if (_fileSystemProvider.FileExists(newFilePath))
+                        _fileSystemProvider.DeleteFile(newFilePath);
                     if (isCut)
                     {
                         RemoveThumbs(src);
-                        src.File.MoveTo(newFilePath);
+                        _fileSystemProvider.MoveFile(src.File.Path, newFilePath);
                         response.Removed.Add(item);
                     }
                     else
                     {
-                        File.Copy(src.File.FullName, newFilePath);
+                        _fileSystemProvider.CopyFile(src.File.Path, newFilePath);
                     }
-                    response.Added.Add(DTOBase.Create(new FileInfo(newFilePath), destPath.Root));
+                    response.Added.Add(DTOBase.Create(new FileMetadata(newFilePath), destPath.Root));
                 }
             }
             return Json(response);
@@ -386,20 +413,20 @@ namespace ElFinder
             }
             for (int i = 0; i < targets.AllKeys.Length; i++)
             {
-                HttpPostedFileBase file = targets[i];                
-                FileInfo path = new FileInfo(Path.Combine(dest.Directory.FullName, Path.GetFileName(file.FileName)));
+                HttpPostedFileBase file = targets[i];
+                FileMetadata path = new FileMetadata(_fileSystemProvider.CombinePath(dest.Directory.Path, Path.GetFileName(file.FileName)));
 
-                if (path.Exists)
+                if (_fileSystemProvider.FileExists(path.Path))
                 {
                     if (dest.Root.UploadOverwrite)
                     {
                         //if file already exist we rename the current file, 
                         //and if upload is succesfully delete temp file, in otherwise we restore old file
-                        string tmpPath = path.FullName + Guid.NewGuid();
+                        string tmpPath = path.Path + Guid.NewGuid();
                         bool uploaded = false;
                         try
                         {
-                            file.SaveAs(tmpPath);
+                            SaveStream(file.InputStream, tmpPath);
                             uploaded = true;
                         }
                         catch { }
@@ -407,28 +434,40 @@ namespace ElFinder
                         {
                             if (uploaded)
                             {
-                                File.Delete(path.FullName);
-                                File.Move(tmpPath, path.FullName);
+                                _fileSystemProvider.DeleteFile(path.Path);
+                                _fileSystemProvider.MoveFile(tmpPath, path.Path);
                             }
                             else
                             {
-                                File.Delete(tmpPath);
+                                _fileSystemProvider.DeleteFile(tmpPath);
                             }
                         }
                     }
                     else
                     {
-                        file.SaveAs(Path.Combine(path.DirectoryName, Helper.GetDuplicatedName(path)));
+                        SaveStream(file.InputStream, _fileSystemProvider.CombinePath(path.Directory.Name, Helper.GetDuplicatedName(path)));
                     }
                 }
                 else
                 {
-                    file.SaveAs(path.FullName);
-                }                
-                response.Added.Add((FileDTO)DTOBase.Create(new FileInfo(path.FullName), dest.Root));
+                    SaveStream(file.InputStream, path.Path);
+                }
+                response.Added.Add((FileDTO)DTOBase.Create(new FileMetadata(path.Path), dest.Root));
             }
             return Json(response);
         }
+
+        private void SaveStream(Stream stream, string destinationPath)
+        {
+            using (var output = _fileSystemProvider.OpenWrite(destinationPath))
+            {
+                if (stream.CanSeek)
+                    stream.Position = 0;
+                stream.CopyTo(output);
+                output.Flush();
+            }
+        }
+
         JsonResult IDriver.Duplicate(IEnumerable<string> targets)
         {
             AddResponse response = new AddResponse();
@@ -437,10 +476,10 @@ namespace ElFinder
                 FullPath fullPath = ParsePath(target);
                 if (fullPath.Directory != null)
                 {
-                    var parentPath = fullPath.Directory.Parent.FullName;
+                    var parentPath = fullPath.Directory.Parent.Path;
                     var name = fullPath.Directory.Name;
-                    var newName = string.Format(@"{0}\{1} copy", parentPath, name);
-                    if (!Directory.Exists(newName))
+                    var newName = _fileSystemProvider.CombinePath(parentPath, name + " copy");
+                    if (!_fileSystemProvider.DirectoryExists(newName))
                     {
                         DirectoryCopy(fullPath.Directory, newName, true);
                     }
@@ -448,41 +487,46 @@ namespace ElFinder
                     {
                         for (int i = 1; i < 100; i++)
                         {
-                            newName = string.Format(@"{0}\{1} copy {2}", parentPath, name, i);
-                            if (!Directory.Exists(newName))
+                            var dirCopyName = string.Format("{0} copy {1}", name, i);
+                            newName = _fileSystemProvider.CombinePath(parentPath, dirCopyName);
+                            if (!_fileSystemProvider.DirectoryExists(newName))
                             {
                                 DirectoryCopy(fullPath.Directory, newName, true);
                                 break;
                             }
                         }
                     }
-                    response.Added.Add(DTOBase.Create(new DirectoryInfo(newName), fullPath.Root));
+                    response.Added.Add(DTOBase.Create(new DirectoryMetadata(newName), fullPath.Root));
                 }
                 else
                 {
-                    var parentPath = fullPath.File.Directory.FullName;
+                    var parentPath = fullPath.File.Directory.Path;
                     var name = fullPath.File.Name.Substring(0, fullPath.File.Name.Length - fullPath.File.Extension.Length);
                     var ext = fullPath.File.Extension;
 
-                    var newName = string.Format(@"{0}\{1} copy{2}", parentPath, name, ext);
+                    var newName = _fileSystemProvider.CombinePath(parentPath, name + " copy" + ext);
 
-                    if (!File.Exists(newName))
+                    if (!_fileSystemProvider.FileExists(newName))
                     {
-                        fullPath.File.CopyTo(newName);
+                        _fileSystemProvider.CopyFile(fullPath.File.Path, newName);
                     }
                     else
                     {
                         for (int i = 1; i < 100; i++)
                         {
-                            newName = string.Format(@"{0}\{1} copy {2}{3}", parentPath, name, i, ext);
-                            if (!File.Exists(newName))
+                            var fileCopyName = string.Format("{0} copy {1}{2}", name, i, ext);
+                            newName = _fileSystemProvider.CombinePath(parentPath, fileCopyName);
+                            if (!_fileSystemProvider.FileExists(newName))
                             {
-                                fullPath.File.CopyTo(newName);
+                                _fileSystemProvider.CopyFile(fullPath.File.Path, newName);
                                 break;
                             }
                         }
                     }
-                    response.Added.Add(DTOBase.Create(new FileInfo(newName), fullPath.Root));
+
+                    var copiedFile = _fileSystemProvider.GetFileMetadata(newName);
+                    UpdateFileMetadata(copiedFile, modifiedDateTime: DateTime.Now, size: fullPath.File.Length);
+                    response.Added.Add(DTOBase.Create(copiedFile, fullPath.Root));
                 }
             }
             return Json(response);
@@ -507,7 +551,7 @@ namespace ElFinder
         {
             FullPath path = ParsePath(target);
             RemoveThumbs(path);
-            path.Root.PicturesEditor.Resize(path.File.FullName, width, height);
+            path.Root.PicturesEditor.Resize(path.File.Path, width, height);
             var output = new ChangedResponse();
             output.Changed.Add((FileDTO)DTOBase.Create(path.File, path.Root));
             return Json(output);
@@ -516,7 +560,7 @@ namespace ElFinder
         {
             FullPath path = ParsePath(target);
             RemoveThumbs(path);
-            path.Root.PicturesEditor.Crop(path.File.FullName, x, y, width, height);
+            path.Root.PicturesEditor.Crop(path.File.Path, x, y, width, height);
             var output = new ChangedResponse();
             output.Changed.Add((FileDTO)DTOBase.Create(path.File, path.Root));
             return Json(output);
@@ -525,7 +569,7 @@ namespace ElFinder
         {
             FullPath path = ParsePath(target);
             RemoveThumbs(path);
-            path.Root.PicturesEditor.Rotate(path.File.FullName, degree);
+            path.Root.PicturesEditor.Rotate(path.File.Path, degree);
             var output = new ChangedResponse();
             output.Changed.Add((FileDTO)DTOBase.Create(path.File, path.Root));
             return Json(output);

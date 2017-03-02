@@ -1,4 +1,5 @@
-﻿using System;
+﻿using ElFinder.FileSystem;
+using System;
 using System.Globalization;
 using System.IO;
 using System.Security.Cryptography;
@@ -9,9 +10,9 @@ namespace ElFinder
 {
     internal static class HttpCacheHelper
     {
-        public static bool IsFileFromCache(FileInfo info, HttpRequestBase request, HttpResponseBase response)
+        public static bool IsFileFromCache(FileMetadata info, HttpRequestBase request, HttpResponseBase response)
         {
-            DateTime updated = info.LastWriteTimeUtc;
+            DateTime updated = info.ModifiedDate;
             string filename = info.Name;
             DateTime modifyDate;
             if (!DateTime.TryParse(request.Headers["If-Modified-Since"], out modifyDate))

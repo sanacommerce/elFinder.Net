@@ -2,6 +2,7 @@
 using System.IO;
 using System.Runtime.Serialization;
 using ElFinder.DTO;
+using ElFinder.FileSystem;
 
 namespace ElFinder.Response
 {
@@ -13,11 +14,11 @@ namespace ElFinder.Response
         [DataMember(Name = "added")]
         public List<DTOBase> Added { get { return _added; } }
 
-        public AddResponse(FileInfo newFile, Root root)
+        public AddResponse(FileMetadata newFile, Root root)
         {
             _added = new List<DTOBase>() { DTOBase.Create(newFile, root) };
         }
-        public AddResponse(DirectoryInfo newDir, Root root)
+        public AddResponse(DirectoryMetadata newDir, Root root)
         {
             _added = new List<DTOBase>() { DTOBase.Create(newDir, root) };
         }

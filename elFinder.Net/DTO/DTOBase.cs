@@ -2,6 +2,7 @@
 using System.Runtime.Serialization;
 using System.IO;
 using System.Linq;
+using ElFinder.FileSystem;
 
 namespace ElFinder.DTO
 {
@@ -58,14 +59,14 @@ namespace ElFinder.DTO
         [DataMember(Name = "locked")]
         public byte Locked { get; protected set; }
 
-        public static DTOBase Create(FileInfo info, Root root)
+        public static DTOBase Create(FileMetadata info, Root root)
         {
             if (info == null)
                 throw new ArgumentNullException("info");
             if (root == null)
                 throw new ArgumentNullException("root");
-            string parentPath = info.Directory.FullName.Substring(root.Directory.FullName.Length);
-            string relativePath = info.FullName.Substring(root.Directory.FullName.Length);
+            string parentPath = info.Directory.GetRelativePath(root.Directory.Path);
+            string relativePath = info.GetRelativePath(root.Directory.Path);
             FileDTO response;
             if (root.CanCreateThumbnail(info))
             {
@@ -84,31 +85,22 @@ namespace ElFinder.DTO
             response.Locked = (root.LockedFolders.Any(f => f == info.Directory.Name) || root.IsLocked) ? (byte)1 : (byte)0;
             response.Name = info.Name;
             response.Size = info.Length;
-            response.UnixTimeStamp = (long)(info.LastWriteTimeUtc - _unixOrigin).TotalSeconds;
+            response.UnixTimeStamp = (long)(info.ModifiedDate - _unixOrigin).TotalSeconds;
             response.Mime = Helper.GetMimeType(info);
             response.Hash = root.VolumeId + Helper.EncodePath(relativePath);
             response.ParentHash = root.VolumeId + Helper.EncodePath(parentPath.Length > 0 ? parentPath : info.Directory.Name);
             return response;
         }
 
-        public static DTOBase Create(DirectoryInfo directory, Root root)
+        public static DTOBase Create(DirectoryMetadata directory, Root root)
         {
             if (directory == null)
                 throw new ArgumentNullException("directory");
             if (root == null)
                 throw new ArgumentNullException("root");
-            if (root.Directory.FullName == directory.FullName)
+            if (root.Directory.Path == directory.Path)
             {
-                bool hasSubdirs = false;
-                DirectoryInfo[] subdirs = directory.GetDirectories();
-                foreach (var item in subdirs)
-                {
-                    if ((item.Attributes & FileAttributes.Hidden) != FileAttributes.Hidden)
-                    {
-                        hasSubdirs = true;
-                        break;
-                    }
-                }
+                bool hasSubdirs = root.GetDirectories(directory.Path, visibleOnly: true).Count > 0;
                 RootDTO response = new RootDTO()
                 {
                     Mime = "directory",
@@ -119,25 +111,25 @@ namespace ElFinder.DTO
                     Locked = root.IsLocked ? (byte)1 : (byte)0,                    
                     Name = root.Alias,                    
                     Size = 0,
-                    UnixTimeStamp = (long)(directory.LastWriteTimeUtc - _unixOrigin).TotalSeconds,
+                    UnixTimeStamp = (long)(directory.ModifiedDate - _unixOrigin).TotalSeconds,
                     VolumeId = root.VolumeId                    
                 };
                 return response;
             }
             else
             {
-                string parentPath = directory.Parent.FullName.Substring(root.Directory.FullName.Length);
+                string parentPath = directory.Parent.GetRelativePath(root.Directory.Path);
                 DirectoryDTO response = new DirectoryDTO()
                 {
                     Mime = "directory",
-                    ContainsChildDirs = directory.GetDirectories().Length > 0 ? (byte)1 : (byte)0,
-                    Hash = root.VolumeId + Helper.EncodePath(directory.FullName.Substring(root.Directory.FullName.Length)),
+                    ContainsChildDirs = root.GetDirectories(directory.Path).Count > 0 ? (byte)1 : (byte)0,
+                    Hash = root.VolumeId + Helper.EncodePath(directory.GetRelativePath(root.Directory.Path)),
                     Read = 1,
                     Write = root.IsReadOnly ? (byte)0 : (byte)1,
                     Locked = (root.LockedFolders.Any(f => f == directory.Name) || root.IsLocked) ? (byte)1 : (byte)0,                    
                     Size = 0,
                     Name = directory.Name,
-                    UnixTimeStamp = (long)(directory.LastWriteTimeUtc - _unixOrigin).TotalSeconds,                    
+                    UnixTimeStamp = (long)(directory.ModifiedDate - _unixOrigin).TotalSeconds,                    
                     ParentHash = root.VolumeId + Helper.EncodePath(parentPath.Length > 0 ? parentPath : directory.Parent.Name)
                 };
                 return response;

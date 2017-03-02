@@ -1,7 +1,7 @@
 ﻿using ElFinder;
-using System.IO;
 using System.Web.Mvc;
 using System.Collections.Generic;
+using ElFinder.FileSystem;
 
 namespace elFinder.Net.Web.Controllers
 {
@@ -9,10 +9,9 @@ namespace elFinder.Net.Web.Controllers
     {
         public virtual ActionResult Index(string folder, string subFolder)
         {
-            FileSystemDriver driver = new FileSystemDriver();
-
+            FileSystemDriver driver = new FileSystemDriver(new FileSystemProvider());
             var root = new Root(
-                    new DirectoryInfo(Server.MapPath("~/Files/" + folder)),
+                    new DirectoryMetadata(Server.MapPath("~/Files/" + folder)),
                     "http://" + Request.Url.Authority + "/Files/" + folder)
             {
                 // Sample using ASP.NET built in Membership functionality...
@@ -23,13 +22,13 @@ namespace elFinder.Net.Web.Controllers
                 IsReadOnly = false, // Can be readonly according to user's membership permission
                 Alias = "Files", // Beautiful name given to the root/home folder
                 MaxUploadSizeInKb = 500, // Limit imposed to user uploaded file <= 500 KB
-                LockedFolders = new List<string>( new string[] { "Folder1"})
+                LockedFolders = new List<string>(new string[] { "Folder1" })
             };
 
             // Was a subfolder selected in Home Index page?
             if (!string.IsNullOrEmpty(subFolder))
             {
-                root.StartPath = new DirectoryInfo(Server.MapPath("~/Files/" + folder + "/" + subFolder));
+                root.StartPath = new DirectoryMetadata(Server.MapPath("~/Files/" + folder + "/" + subFolder));
             }
 
             driver.AddRoot(root);
@@ -41,16 +40,20 @@ namespace elFinder.Net.Web.Controllers
 
         public virtual ActionResult SelectFile(string target)
         {
-            FileSystemDriver driver = new FileSystemDriver();
+            FileSystemDriver driver = new FileSystemDriver(new FileSystemProvider());
 
             driver.AddRoot(
                 new Root(
-                    new DirectoryInfo(Server.MapPath("~/Files")),
-                    "http://" + Request.Url.Authority + "/Files") { IsReadOnly = false });
+                    new DirectoryMetadata(Server.MapPath("~/Files")),
+                    "http://" + Request.Url.Authority + "/Files")
+                {
+                    IsReadOnly = false
+                }
+            );
 
             var connector = new Connector(driver);
 
-            return Json(connector.GetFileByHash(target).FullName);
+            return Json(connector.GetFileByHash(target).Path);
         }
 
     }

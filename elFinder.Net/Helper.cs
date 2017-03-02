@@ -1,4 +1,5 @@
-﻿using System;
+﻿using ElFinder.FileSystem;
+using System;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -8,7 +9,7 @@ namespace ElFinder
 {
     internal static class Helper
     {
-        public static string GetMimeType(FileInfo file)
+        public static string GetMimeType(FileMetadata file)
         {
             if (file.Extension.Length > 1)
                 return Mime.GetMimeType(file.Extension.ToLower().Substring(1));
@@ -29,9 +30,9 @@ namespace ElFinder
             return System.Text.UTF8Encoding.UTF8.GetString(HttpServerUtility.UrlTokenDecode(path));
         }
 
-        public static string GetFileMd5(FileInfo info)
+        public static string GetFileMd5(FileMetadata info)
         {
-            return GetFileMd5(info.Name, info.LastWriteTimeUtc);
+            return GetFileMd5(info.Name, info.ModifiedDate);
         }
 
         public static string GetFileMd5(string fileName, DateTime modified)
@@ -43,9 +44,9 @@ namespace ElFinder
             return BitConverter.ToString(_md5CryptoProvider.ComputeHash(buffer)).Replace("-", string.Empty);
         }
 
-        public static string GetDuplicatedName(FileInfo file)
+        public static string GetDuplicatedName(FileMetadata file)
         {
-            var parentPath = file.DirectoryName;
+            var parentPath = file.Directory.Name;
             var name = Path.GetFileNameWithoutExtension(file.Name);
             var ext = file.Extension;
 
@@ -68,6 +69,17 @@ namespace ElFinder
             }
 
             return newName;
+        }
+
+        public static string GetRelativePath(string path, string rootPath)
+        {
+            if (rootPath.Length <= 1 && path.Length <= 1)
+                return string.Empty;
+
+            if (rootPath.Length <= 1)
+                return path;
+
+            return path.Substring(rootPath.Length);
         }
 
         private static Encoder _stringEncoder = Encoding.UTF8.GetEncoder();
