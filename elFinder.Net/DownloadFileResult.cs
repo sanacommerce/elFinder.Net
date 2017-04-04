@@ -87,7 +87,7 @@ namespace ElFinder
             else
                 fileName = "filename*=UTF-8\'\'" + fileNameEncoded; // RFC 6266 (RFC 2231/RFC 5987)
 
-            return (!IsDownload && IsInlineType(mime) ? "attachment; " : "inline;") + fileName;
+            return (!IsDownload && IsInlineType(mime) ? "inline;" : "attachment;") + fileName;
         }
 
         private bool IsInlineType(string mime)
