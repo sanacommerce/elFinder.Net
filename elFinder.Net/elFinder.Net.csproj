@@ -38,13 +38,14 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <PropertyGroup>
-    <SignAssembly>true</SignAssembly>
+    <SignAssembly>false</SignAssembly>
   </PropertyGroup>
   <PropertyGroup>
-    <DelaySign>true</DelaySign>
+    <DelaySign>false</DelaySign>
   </PropertyGroup>
   <PropertyGroup>
-    <AssemblyOriginatorKeyFile>scl_public.snk</AssemblyOriginatorKeyFile>
+    <AssemblyOriginatorKeyFile>
+    </AssemblyOriginatorKeyFile>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="Microsoft.Web.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=MSIL">
@@ -137,7 +138,6 @@
     <None Include="packages.config">
       <SubType>Designer</SubType>
     </None>
-    <None Include="scl_public.snk" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <Import Project="$(SolutionDir)\.nuget\NuGet.targets" Condition="Exists('$(SolutionDir)\.nuget\NuGet.targets')" />
