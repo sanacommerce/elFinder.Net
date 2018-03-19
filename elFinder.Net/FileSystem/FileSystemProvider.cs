@@ -115,7 +115,7 @@ namespace ElFinder.FileSystem
 
         public virtual Stream OpenWrite(string name)
         {
-            return new FileInfo(name).OpenWrite();
+            return File.Open(name, FileMode.Create);
         }
 
         public virtual Stream OpenRead(string name)

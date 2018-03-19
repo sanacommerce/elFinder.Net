@@ -24,7 +24,7 @@ namespace elFinder.Net.Web.Controllers
                 MaxUploadSizeInKb = 500, // Limit imposed to user uploaded file <= 500 KB
                 LockedFolders = new List<string>(new string[] { "Folder1" })
             };
-
+            root.Initialize(new FileSystemProvider());
             // Was a subfolder selected in Home Index page?
             if (!string.IsNullOrEmpty(subFolder))
             {
