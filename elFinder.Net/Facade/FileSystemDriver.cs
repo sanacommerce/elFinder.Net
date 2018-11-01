@@ -107,7 +107,17 @@ namespace ElFinder
             Root root = _roots.First(r => r.VolumeId == volumePrefix);
             string path = Helper.DecodePath(pathHash);
             string dirUrl = path != root.Directory.Name ? path : string.Empty;
+            if (dirUrl.Contains("../") || dirUrl.Contains("..\\"))
+            {
+                // Prevents "Path Traversal" attack.
+                throw new NotSupportedException($"Path format is not supported. Path: '{dirUrl}'.");
+            }
             var fullPath = _fileSystemProvider.CombinePath(root.Directory.Path, dirUrl);
+            if (!fullPath.StartsWith(root.Directory.Path, StringComparison.OrdinalIgnoreCase))
+            {
+                // Prevents "Path Traversal" attack.
+                throw new NotSupportedException($"Invalid path. Path: '{dirUrl}'.");
+            }
             bool looksLikeDirectory = fullPath.EndsWith(Path.DirectorySeparatorChar.ToString()) 
                 || fullPath.EndsWith(Path.AltDirectorySeparatorChar.ToString());
 
